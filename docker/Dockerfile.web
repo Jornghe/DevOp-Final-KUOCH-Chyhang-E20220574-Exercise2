@@ -1,0 +1,36 @@
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install JDK 21, NGINX, git, openssh-server, Maven, PHP, curl
+RUN apt-get update && apt-get install -y \
+    openjdk-21-jdk \
+    nginx \
+    git \
+    openssh-server \
+    maven \
+    curl \
+    php \
+    php-cli \
+    && rm -rf /var/lib/apt/lists/*
+
+# SSH setup on port 2222
+RUN mkdir -p /var/run/sshd \
+    && sed -i 's/#Port 22/Port 2222/' /etc/ssh/sshd_config \
+    && sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config \
+    && echo "root:Hello@123" | chpasswd
+
+# NGINX config — proxy :8443 → Spring Boot :8080
+COPY nginx/default.conf /etc/nginx/sites-available/default
+
+# Clone Spring Boot project from FQ01
+WORKDIR /app
+RUN git clone https://github.com/Jornghe/DevOp-Final-KUOCH-Chyhang-E20220574-Exercise1.git .
+
+# Entrypoint script
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+EXPOSE 8443 2222
+
+ENTRYPOINT ["/entrypoint.sh"]
