@@ -1,0 +1,124 @@
+---
+- name: FQ03 - Build, Test, and Backup
+  hosts: webserver
+  gather_facts: false
+
+  vars:
+    app_dir: /app
+    db_name: "B-KUOCH_Chyhang-db"
+    db_user: root
+    db_pass: "Hello@123"
+    db_host: db
+    backup_path: /tmp/backup.sql
+
+  tasks:
+
+    # ── 1. Git pull ──────────────────────────────────────────────────────
+    - name: Reset any local changes so git pull succeeds
+      command: git checkout -- .
+      args:
+        chdir: "{{ app_dir }}"
+
+    - name: Pull latest code from remote
+      command: git pull
+      args:
+        chdir: "{{ app_dir }}"
+      register: git_pull_result
+
+    - name: Show git pull output
+      debug:
+        var: git_pull_result.stdout_lines
+
+    # ── 2. Update application-test.properties to use SQLite ─────────────
+    - name: Write application-test.properties with SQLite config
+      copy:
+        dest: "{{ app_dir }}/src/main/resources/application-test.properties"
+        content: |
+          spring.datasource.url=jdbc:sqlite:{{ app_dir }}/testdb.sqlite
+          spring.datasource.driver-class-name=org.sqlite.JDBC
+          spring.datasource.username=
+          spring.datasource.password=
+          spring.jpa.hibernate.ddl-auto=create-drop
+          spring.jpa.database-platform=org.hibernate.community.dialect.SQLiteDialect
+          spring.jpa.show-sql=true
+          app.photo.upload-dir=uploads/test-photos
+          app.base-url=http://localhost:8080
+
+    # ── 3. Add SQLite dependency to pom.xml if not already present ───────
+    - name: Check if SQLite dependency already in pom.xml
+      command: grep -c "sqlite-jdbc" "{{ app_dir }}/pom.xml"
+      register: sqlite_check
+      ignore_errors: true
+
+    - name: Add SQLite dependency to pom.xml
+      replace:
+        path: "{{ app_dir }}/pom.xml"
+        regexp: '(<!-- H2 for tests -->)'
+        replace: |
+          <!-- SQLite for tests -->
+          <dependency>
+            <groupId>org.xerial</groupId>
+            <artifactId>sqlite-jdbc</artifactId>
+            <version>3.47.1.0</version>
+            <scope>test</scope>
+          </dependency>
+          <!-- Hibernate SQLite dialect -->
+          <dependency>
+            <groupId>org.hibernate.orm</groupId>
+            <artifactId>hibernate-community-dialects</artifactId>
+            <scope>test</scope>
+          </dependency>
+          \1
+      when: sqlite_check.rc != 0 or sqlite_check.stdout == "0"
+
+    # ── 4. Maven build ───────────────────────────────────────────────────
+    - name: Build with Maven (skip tests for build)
+      command: mvn package -DskipTests -Dmaven.compiler.enablePreview=true -Djvm.args="--enable-preview"
+      args:
+        chdir: "{{ app_dir }}"
+      environment:
+        JAVA_HOME: /opt/java/openjdk
+        PATH: /opt/java/openjdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      register: build_result
+
+    - name: Show build result
+      debug:
+        var: build_result.stdout_lines
+
+    # ── 5. Run tests against SQLite ──────────────────────────────────────
+    - name: Run tests with SQLite test profile
+      command: mvn test -Dspring.profiles.active=test -Dmaven.compiler.enablePreview=true -Djvm.args="--enable-preview"
+      args:
+        chdir: "{{ app_dir }}"
+      environment:
+        JAVA_HOME: /opt/java/openjdk
+        PATH: /opt/java/openjdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      register: test_result
+      ignore_errors: true
+
+    - name: Show test result
+      debug:
+        var: test_result.stdout_lines
+
+    # ── 6. Backup MySQL database ─────────────────────────────────────────
+    - name: Install mysql-client if not present
+      apt:
+        name: mysql-client
+        state: present
+        update_cache: true
+
+    - name: Dump MySQL database to backup.sql
+      shell: >
+        mysqldump -h {{ db_host }} -u {{ db_user }} -p{{ db_pass }}
+        --single-transaction --routines --triggers
+        "{{ db_name }}" > {{ backup_path }}
+      register: backup_result
+
+    - name: Confirm backup file created
+      stat:
+        path: "{{ backup_path }}"
+      register: backup_stat
+
+    - name: Show backup file size
+      debug:
+        msg: "Backup created: {{ backup_path }} ({{ backup_stat.stat.size }} bytes)"

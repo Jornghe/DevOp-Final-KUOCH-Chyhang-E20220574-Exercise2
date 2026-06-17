@@ -1,15 +1,14 @@
-FROM ubuntu:24.04
+FROM eclipse-temurin:25-jdk-noble
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install JDK 21, NGINX, git, openssh-server, Maven, PHP, curl
+# Install tools
 RUN apt-get update && apt-get install -y \
-    openjdk-21-jdk \
     nginx \
     git \
     openssh-server \
-    maven \
     curl \
+    maven \
     php \
     php-cli \
     && rm -rf /var/lib/apt/lists/*
